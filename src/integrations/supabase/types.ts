@@ -14,7 +14,87 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      app_settings: {
+        Row: {
+          created_at: string
+          key: string
+          updated_at: string
+          value: string
+        }
+        Insert: {
+          created_at?: string
+          key: string
+          updated_at?: string
+          value: string
+        }
+        Update: {
+          created_at?: string
+          key?: string
+          updated_at?: string
+          value?: string
+        }
+        Relationships: []
+      }
+      research_requests: {
+        Row: {
+          created_at: string
+          description: string
+          drive_file_id: string | null
+          drive_link: string | null
+          error_message: string | null
+          feedback: Json
+          id: string
+          pdf_name: string | null
+          report_html: string | null
+          review_token: string
+          reviewer_email: string
+          revisions: number
+          sources: Json
+          status: string
+          subtopics: string
+          topic: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string
+          drive_file_id?: string | null
+          drive_link?: string | null
+          error_message?: string | null
+          feedback?: Json
+          id?: string
+          pdf_name?: string | null
+          report_html?: string | null
+          review_token?: string
+          reviewer_email: string
+          revisions?: number
+          sources?: Json
+          status?: string
+          subtopics?: string
+          topic: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          description?: string
+          drive_file_id?: string | null
+          drive_link?: string | null
+          error_message?: string | null
+          feedback?: Json
+          id?: string
+          pdf_name?: string | null
+          report_html?: string | null
+          review_token?: string
+          reviewer_email?: string
+          revisions?: number
+          sources?: Json
+          status?: string
+          subtopics?: string
+          topic?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
