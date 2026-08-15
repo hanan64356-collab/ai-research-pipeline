@@ -213,8 +213,8 @@ function htmlToBlocks(html: string): Block[] {
   const tagRe = /<(h1|h2|h3|p|li)[^>]*>([\s\S]*?)<\/\1>/gi;
   let match: RegExpExecArray | null;
   while ((match = tagRe.exec(html)) !== null) {
-    const tag = match[1].toLowerCase();
-    const text = decodeEntities(match[2].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+    const tag = (match[1] ?? "p").toLowerCase();
+    const text = decodeEntities((match[2] ?? "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
     if (!text) continue;
     if (tag === "h1") blocks.push({ text, size: 20, bold: true, bullet: false, gap: 16 });
     else if (tag === "h2") blocks.push({ text, size: 14, bold: true, bullet: false, gap: 12 });
