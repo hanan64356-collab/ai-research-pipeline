@@ -1,11 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useRef, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   CheckCircle2,
   HardDrive,
+  Loader2,
   Mail,
-  RefreshCcw,
   Table2,
   Workflow,
 } from "lucide-react";
@@ -16,16 +17,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { WorkflowCanvas, type StageId } from "@/components/WorkflowCanvas";
-import {
-  DEMO_FORM,
-  buildReportHtml,
-  driveLinkFor,
-  pdfNameFor,
-  tavilyResults,
-  type PipelineForm,
-  type SheetRow,
-  type TavilyResult,
-} from "@/lib/pipeline";
+import { DEMO_FORM, type PipelineForm } from "@/lib/pipeline";
+import { getRequestStatus, submitResearch } from "@/lib/research.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -42,6 +35,8 @@ export const Route = createFileRoute("/")({
         content:
           "Form to research to email review loop to PDF in Drive and a logged row in Sheets, in one automated run.",
       },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: Index,
@@ -53,104 +48,114 @@ function now() {
   return new Date().toLocaleTimeString("en-GB", { hour12: false });
 }
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const STAGE_ORDER: StageId[] = [
+  "form",
+  "tavily",
+  "llm",
+  "mail",
+  "switch",
+  "revise",
+  "pdf",
+  "drive",
+  "sheet",
+  "done",
+];
+
+function stagesFor(status: string): { active: StageId | null; completed: StageId[] } {
+  const upTo = (id: StageId, active: StageId | null) => ({
+    active,
+    completed: STAGE_ORDER.slice(0, STAGE_ORDER.indexOf(id) + 1),
+  });
+  switch (status) {
+    case "researching":
+      return upTo("form", "tavily");
+    case "drafting":
+      return upTo("tavily", "llm");
+    case "awaiting_review":
+      return upTo("mail", "switch");
+    case "revising":
+      return upTo("switch", "revise");
+    case "finalizing":
+      return upTo("revise", "pdf");
+    case "completed":
+      return { active: null, completed: STAGE_ORDER };
+    default:
+      return { active: null, completed: [] };
+  }
+}
 
 function Index() {
   const [form, setForm] = useState<PipelineForm>(DEMO_FORM);
-  const [active, setActive] = useState<StageId | null>(null);
-  const [completed, setCompleted] = useState<StageId[]>([]);
   const [log, setLog] = useState<LogLine[]>([]);
-  const [results, setResults] = useState<TavilyResult[]>([]);
-  const [reportHtml, setReportHtml] = useState("");
-  const [revision, setRevision] = useState(0);
-  const [feedback, setFeedback] = useState("Add a 5-year cost table and cite 2026 figures.");
-  const [feedbackHistory, setFeedbackHistory] = useState<string[]>([]);
-  const [awaitingReply, setAwaitingReply] = useState(false);
   const [running, setRunning] = useState(false);
-  const [finished, setFinished] = useState<{ drive: string; pdf: string } | null>(null);
-  const [rows, setRows] = useState<SheetRow[]>([]);
-  const emailRef = useRef<HTMLDivElement>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
+  const [status, setStatus] = useState<Awaited<ReturnType<typeof getRequestStatus>>>(null);
+  const [error, setError] = useState<string | null>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
+
+  const submit = useServerFn(submitResearch);
+  const readStatus = useServerFn(getRequestStatus);
 
   const push = useCallback((node: string, text: string) => {
     setLog((l) => [...l, { at: now(), node, text }]);
   }, []);
 
-  const run = useCallback(
-    async (stage: StageId, node: string, text: string, ms = 750) => {
-      setActive(stage);
-      push(node, text);
-      await wait(ms);
-      setCompleted((c) => (c.includes(stage) ? c : [...c, stage]));
-    },
-    [push],
-  );
+  useEffect(() => {
+    if (!requestId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const next = await readStatus({ data: { id: requestId } });
+        if (cancelled || !next) return;
+        setStatus((prev) => {
+          if (prev?.status !== next.status) {
+            push("Workflow", `Status → ${next.status.replace(/_/g, " ")}`);
+          }
+          return next;
+        });
+      } catch {
+        /* transient polling failure */
+      }
+    };
+    void tick();
+    const id = window.setInterval(tick, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [requestId, readStatus, push]);
 
   async function startRun() {
     setRunning(true);
-    setFinished(null);
-    setCompleted([]);
+    setError(null);
     setLog([]);
-    setRevision(0);
-    setFeedbackHistory([]);
-    await run("form", "Form Trigger", `Submission received for "${form.topic}"`, 600);
-    await run("tavily", "Tavily Search", "Querying Tavily with topic + subtopics + context", 1100);
-    const res = tavilyResults(form);
-    setResults(res);
-    push("Tavily Search", `${res.length} sources returned`);
-    await run("llm", "AI Agent", "Composing HTML research report from sources", 1200);
-    setReportHtml(buildReportHtml(form, res, 0));
-    await run("mail", "Gmail", `Draft emailed to ${form.reviewerEmail}`, 800);
-    setActive("switch");
-    setAwaitingReply(true);
-    push("Wait for reply", "Waiting for the reviewer to answer APPROVED or FEEDBACK::");
-    setRunning(false);
-    emailRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setStatus(null);
+    setRequestId(null);
+    push("Form Trigger", `Submission received for "${form.topic}"`);
+    push("Tavily Search", "Searching the live web and drafting the report…");
+    statusRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    try {
+      const res = await submit({
+        data: {
+          topic: form.topic,
+          subtopics: form.subtopics,
+          description: form.description,
+          reviewerEmail: form.reviewerEmail,
+          origin: window.location.origin,
+        },
+      });
+      setRequestId(res.id);
+      push("Gmail", `Draft emailed to ${form.reviewerEmail} — check the inbox to review`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "The workflow failed.";
+      setError(message);
+      push("Error", message);
+    } finally {
+      setRunning(false);
+    }
   }
 
-  async function replyFeedback() {
-    if (!feedback.trim()) return;
-    setAwaitingReply(false);
-    setRunning(true);
-    const nextRev = revision + 1;
-    const history = [...feedbackHistory, feedback.trim()];
-    await run("switch", "Switch", "Reply matched FEEDBACK:: branch", 600);
-    await run("revise", "AI Agent", `Revising report — cycle ${nextRev}`, 1200);
-    setFeedbackHistory(history);
-    setRevision(nextRev);
-    setReportHtml(buildReportHtml(form, results, nextRev, history));
-    await run("mail", "Gmail", `Revision ${nextRev} emailed back to reviewer`, 800);
-    setCompleted((c) => c.filter((s) => s !== "revise" || true));
-    setActive("switch");
-    setAwaitingReply(true);
-    push("Wait for reply", "Loop continues until the reviewer approves");
-    setRunning(false);
-  }
-
-  async function replyApproved() {
-    setAwaitingReply(false);
-    setRunning(true);
-    await run("switch", "Switch", "Reply matched APPROVED branch", 600);
-    await run("pdf", "HTML → PDF", `Rendering ${pdfNameFor(form.topic)}`, 1100);
-    const drive = driveLinkFor(form.topic);
-    await run("drive", "Google Drive", "PDF uploaded to /Research Reports", 900);
-    await run("sheet", "Google Sheets", "Appending row to Research Log", 800);
-    setRows((r) => [
-      {
-        timestamp: new Date().toISOString().slice(0, 16).replace("T", " "),
-        topic: form.topic,
-        subtopics: form.subtopics,
-        reviewerEmail: form.reviewerEmail,
-        driveLink: drive,
-        revisions: revision,
-        status: "Completed",
-      },
-      ...r,
-    ]);
-    await run("done", "Gmail", "Final \u201cIt\u2019s done\u201d email sent", 800);
-    setActive(null);
-    setFinished({ drive, pdf: pdfNameFor(form.topic) });
-    setRunning(false);
-  }
+  const stages = stagesFor(status?.status ?? (running ? "researching" : ""));
 
   const field = (k: keyof PipelineForm) => ({
     value: form[k],
@@ -162,26 +167,26 @@ function Index() {
     <main className="mx-auto w-full max-w-6xl px-4 pb-24 sm:px-6">
       <header className="pt-14 pb-10">
         <Badge variant="outline" className="gap-2 border-primary/40 text-primary">
-          <Workflow className="size-3.5" /> n8n · Tavily · Gmail · Drive · Sheets
+          <Workflow className="size-3.5" /> Tavily · AI · Gmail · Drive · Sheets
         </Badge>
         <h1 className="mt-5 text-4xl leading-[1.05] font-bold sm:text-5xl">
           AI Research Pipeline with
           <span className="text-primary"> human approval</span>
         </h1>
         <p className="mt-4 max-w-2xl text-base text-muted-foreground">
-          One submission triggers live web research, an AI-written HTML report and an email review
-          loop. Nothing gets archived until a human replies <span className="text-accent">APPROVED</span>.
+          One submission triggers live web research, an AI-written HTML report and a real email
+          review loop. Nothing is archived until the reviewer approves from their inbox.
         </p>
         <div className="mt-6 h-px w-40 rule-gradient" />
       </header>
 
-      <WorkflowCanvas active={active} completed={completed} />
+      <WorkflowCanvas active={stages.active} completed={stages.completed} />
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
         <section className="panel p-6">
           <h2 className="text-lg font-semibold">1 · Research request form</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            These four fields are the webhook payload the workflow starts from.
+            These four fields are the payload the workflow starts from.
           </p>
           <div className="mt-5 space-y-4">
             <div className="space-y-2">
@@ -206,9 +211,17 @@ function Index() {
               disabled={running || !form.topic || !form.reviewerEmail}
               onClick={startRun}
             >
-              {running ? "Running workflow…" : "Submit research request"}
-              <ArrowRight className="size-4" />
+              {running ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" /> Researching & drafting…
+                </>
+              ) : (
+                <>
+                  Submit research request <ArrowRight className="size-4" />
+                </>
+              )}
             </Button>
+            {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
 
           <div className="mt-6 rounded-lg border border-border bg-node p-4">
@@ -227,71 +240,66 @@ function Index() {
         </section>
 
         <div className="space-y-6">
-          <section className="panel p-6" ref={emailRef}>
+          <section className="panel p-6" ref={statusRef}>
             <div className="flex items-center justify-between gap-4">
               <h2 className="text-lg font-semibold">2 · Reviewer inbox</h2>
-              {revision > 0 && <Badge variant="secondary">Revision {revision}</Badge>}
+              {status && status.revisions > 0 && (
+                <Badge variant="secondary">Revision {status.revisions}</Badge>
+              )}
             </div>
-            {!reportHtml ? (
+            {!requestId && !running ? (
               <p className="mt-3 text-sm text-muted-foreground">
-                Submit the form to receive the draft report by email.
+                Submit the form and the reviewer receives the draft by email, with Approve and Send
+                feedback buttons that open a secure review page.
+              </p>
+            ) : running && !requestId ? (
+              <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" /> Searching the web, writing the report and
+                sending the email. This takes up to a minute.
               </p>
             ) : (
-              <>
-                <div className="mt-4 rounded-lg border border-border bg-node">
-                  <div className="border-b border-border p-4">
-                    <p className="flex items-center gap-2 text-sm font-semibold">
-                      <Mail className="size-4 text-primary" />
-                      {revision > 0 ? `Revised Research Draft` : "Research Draft"}: {form.topic}
-                    </p>
-                    <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-                      to {form.reviewerEmail} · reply with APPROVED or FEEDBACK:: your notes
-                    </p>
-                  </div>
-                  <div
-                    className="max-h-72 overflow-y-auto p-4 text-sm leading-relaxed [&_a]:text-primary [&_h1]:mb-2 [&_h1]:font-display [&_h1]:text-xl [&_h1]:font-bold [&_h2]:mt-4 [&_h2]:mb-1 [&_h2]:font-display [&_h2]:text-sm [&_h2]:font-semibold [&_li]:mb-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:text-muted-foreground [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:text-muted-foreground [&_.meta]:font-mono [&_.meta]:text-[11px] [&_.rev]:mt-3 [&_.rev]:rounded-md [&_.rev]:border [&_.rev]:border-accent/40 [&_.rev]:p-3 [&_.rev]:text-xs"
-                    dangerouslySetInnerHTML={{ __html: reportHtml }}
-                  />
-                </div>
-
-                {awaitingReply && (
-                  <div className="mt-4 space-y-3">
-                    <Label htmlFor="fb">Your reply</Label>
-                    <Textarea
-                      id="fb"
-                      rows={2}
-                      value={feedback}
-                      onChange={(e) => setFeedback(e.target.value)}
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      <Button variant="secondary" disabled={running} onClick={replyFeedback}>
-                        <RefreshCcw className="size-4" /> Send FEEDBACK
-                      </Button>
-                      <Button disabled={running} onClick={replyApproved}>
-                        <CheckCircle2 className="size-4" /> Reply APPROVED
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </>
+              <div className="mt-4 space-y-3">
+                <p className="flex items-center gap-2 text-sm font-semibold">
+                  <Mail className="size-4 text-primary" /> Draft emailed to {form.reviewerEmail}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Status:{" "}
+                  <span className="font-mono text-primary">
+                    {(status?.status ?? "awaiting_review").replace(/_/g, " ")}
+                  </span>
+                  {status ? ` · ${status.sourceCount} sources` : ""}
+                </p>
+                {status?.error && <p className="text-sm text-destructive">{status.error}</p>}
+                <p className="text-xs text-muted-foreground">
+                  Open the email and choose Approve or Send feedback. This page updates
+                  automatically as the agent revises or finalises the report.
+                </p>
+              </div>
             )}
           </section>
 
           <section className="panel p-6">
             <h2 className="text-lg font-semibold">3 · Archive</h2>
-            {!finished ? (
+            {status?.status !== "completed" ? (
               <p className="mt-3 text-sm text-muted-foreground">
-                Drive upload and the Sheets row are written only after approval.
+                The Drive upload and the Sheets row are written only after approval.
               </p>
             ) : (
               <div className="mt-4 space-y-4">
-                <div className="flex items-start gap-3 rounded-lg border border-primary/40 bg-node p-4">
+                <a
+                  href={status.driveLink ?? "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-start gap-3 rounded-lg border border-primary/40 bg-node p-4"
+                >
                   <HardDrive className="mt-0.5 size-4 text-primary" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">{finished.pdf}</p>
-                    <p className="truncate font-mono text-[11px] text-primary">{finished.drive}</p>
-                  </div>
-                </div>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold">{status.pdfName}</span>
+                    <span className="block truncate font-mono text-[11px] text-primary">
+                      Open in Google Drive
+                    </span>
+                  </span>
+                </a>
                 <div className="rounded-lg border border-border bg-node p-4">
                   <p className="flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                     <Table2 className="size-3.5" /> Research Log (Google Sheets)
@@ -307,14 +315,12 @@ function Index() {
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map((r, i) => (
-                          <tr key={i} className="border-t border-border">
-                            <td className="py-1.5 pr-3">{r.timestamp.slice(0, 10)}</td>
-                            <td className="truncate py-1.5 pr-3">{r.topic}</td>
-                            <td className="py-1.5 pr-3">{r.revisions}</td>
-                            <td className="py-1.5 text-primary">{r.status}</td>
-                          </tr>
-                        ))}
+                        <tr className="border-t border-border">
+                          <td className="py-1.5 pr-3">{status.createdAt.slice(0, 10)}</td>
+                          <td className="truncate py-1.5 pr-3">{status.topic}</td>
+                          <td className="py-1.5 pr-3">{status.revisions}</td>
+                          <td className="py-1.5 text-primary">Approved</td>
+                        </tr>
                       </tbody>
                     </table>
                   </div>
