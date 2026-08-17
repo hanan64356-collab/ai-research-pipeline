@@ -9,10 +9,11 @@ export type Source = { title: string; url: string; snippet: string; score: numbe
 const GATEWAY = "https://connector-gateway.lovable.dev";
 
 function requireEnv(name: string): string {
-  const value = process.env[name];
+  const value = process.env[name]?.trim().replace(/^["']|["']$/g, "");
   if (!value) throw new Error(`${name} is not configured`);
   return value;
 }
+
 
 async function gateway(
   connector: "google_mail" | "google_drive" | "google_sheets",
