@@ -4,11 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   CheckCircle2,
+  Circle,
+  Clock,
   HardDrive,
   Loader2,
   Mail,
+  RefreshCw,
   Table2,
   Workflow,
+  XCircle,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -16,9 +20,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { WorkflowCanvas, type StageId } from "@/components/WorkflowCanvas";
 import { DEMO_FORM, type PipelineForm } from "@/lib/pipeline";
-import { getRequestStatus, submitResearch } from "@/lib/research.functions";
+import { getRequestStatus, listRequests, submitResearch } from "@/lib/research.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
