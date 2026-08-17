@@ -106,6 +106,28 @@ export async function runInitialResearch(input: {
   }
 }
 
+export async function listRequests() {
+  const db = await admin();
+  const { data, error } = await db
+    .from("research_requests")
+    .select("id, topic, status, revisions, sources, drive_link, pdf_name, error_message, created_at, updated_at")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r) => ({
+    id: r.id as string,
+    topic: r.topic as string,
+    status: r.status as string,
+    revisions: r.revisions as number,
+    sourceCount: ((r.sources ?? []) as Source[]).length,
+    driveLink: r.drive_link as string | null,
+    pdfName: r.pdf_name as string | null,
+    error: r.error_message as string | null,
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  }));
+}
+
 export async function readStatus(id: string) {
   const db = await admin();
   const { data } = await db

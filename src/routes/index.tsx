@@ -4,11 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   CheckCircle2,
+  Circle,
+  Clock,
   HardDrive,
   Loader2,
   Mail,
+  RefreshCw,
   Table2,
   Workflow,
+  XCircle,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -16,9 +20,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { WorkflowCanvas, type StageId } from "@/components/WorkflowCanvas";
 import { DEMO_FORM, type PipelineForm } from "@/lib/pipeline";
-import { getRequestStatus, submitResearch } from "@/lib/research.functions";
+import { getRequestStatus, listRequests, submitResearch } from "@/lib/research.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -43,6 +56,8 @@ export const Route = createFileRoute("/")({
 });
 
 type LogLine = { at: string; node: string; text: string };
+
+type Submission = Awaited<ReturnType<typeof listRequests>>[number];
 
 function now() {
   return new Date().toLocaleTimeString("en-GB", { hour12: false });
@@ -91,10 +106,29 @@ function Index() {
   const [requestId, setRequestId] = useState<string | null>(null);
   const [status, setStatus] = useState<Awaited<ReturnType<typeof getRequestStatus>>>(null);
   const [error, setError] = useState<string | null>(null);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [loadingSubmissions, setLoadingSubmissions] = useState(false);
   const statusRef = useRef<HTMLDivElement>(null);
 
   const submit = useServerFn(submitResearch);
   const readStatus = useServerFn(getRequestStatus);
+  const fetchAll = useServerFn(listRequests);
+
+  const refreshSubmissions = useCallback(async () => {
+    setLoadingSubmissions(true);
+    try {
+      const rows = await fetchAll();
+      setSubmissions(rows);
+    } catch {
+      /* ignore list errors */
+    } finally {
+      setLoadingSubmissions(false);
+    }
+  }, [fetchAll]);
+
+  useEffect(() => {
+    void refreshSubmissions();
+  }, [refreshSubmissions]);
 
   const push = useCallback((node: string, text: string) => {
     setLog((l) => [...l, { at: now(), node, text }]);
@@ -113,17 +147,22 @@ function Index() {
           }
           return next;
         });
+        if (next.status !== prevRef.current) {
+          prevRef.current = next.status;
+          void refreshSubmissions();
+        }
       } catch {
         /* transient polling failure */
       }
     };
+    const prevRef = { current: "" };
     void tick();
     const id = window.setInterval(tick, 4000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [requestId, readStatus, push]);
+  }, [requestId, readStatus, push, refreshSubmissions]);
 
   async function startRun() {
     setRunning(true);
@@ -146,6 +185,7 @@ function Index() {
       });
       setRequestId(res.id);
       push("Gmail", `Draft emailed to ${form.reviewerEmail} — check the inbox to review`);
+      void refreshSubmissions();
     } catch (e) {
       const message = e instanceof Error ? e.message : "The workflow failed.";
       setError(message);

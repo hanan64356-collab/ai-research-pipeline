@@ -24,6 +24,11 @@ export const submitResearch = createServerFn({ method: "POST" })
     return runInitialResearch(data);
   });
 
+export const listRequests = createServerFn({ method: "GET" }).handler(async () => {
+  const { listRequests } = await import("./pipeline.server");
+  return listRequests();
+});
+
 export const getRequestStatus = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => z.object({ id: z.string().uuid() }).parse(data))
   .handler(async ({ data }) => {
