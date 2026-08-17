@@ -50,24 +50,32 @@ export async function tavilySearch(
   description: string,
 ): Promise<Source[]> {
   const query = [topic, subtopics, description].filter(Boolean).join(" — ").slice(0, 380);
-  const res = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${requireEnv("TAVILY_API_KEY")}`,
-    },
-    body: JSON.stringify({
-      query,
-      search_depth: "advanced",
-      max_results: 8,
-      include_answer: false,
-    }),
-  });
+  const key = requireEnv("TAVILY_API_KEY");
+  const payload = {
+    query,
+    search_depth: "advanced",
+    max_results: 8,
+    include_answer: false,
+  };
+
+  const call = (mode: "bearer" | "body") =>
+    fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(mode === "bearer" ? { Authorization: `Bearer ${key}` } : {}),
+      },
+      body: JSON.stringify(mode === "bearer" ? payload : { ...payload, api_key: key }),
+    });
+
+  let res = await call("bearer");
+  if (res.status === 401) res = await call("body");
   if (!res.ok) {
     const body = await res.text();
     console.error(`Tavily search failed [${res.status}]: ${body}`);
     throw new Error(`Tavily search failed [${res.status}]: ${body}`);
   }
+
   const json = (await res.json()) as {
     results?: { title?: string; url?: string; content?: string; score?: number }[];
   };
