@@ -57,6 +57,8 @@ export const Route = createFileRoute("/")({
 
 type LogLine = { at: string; node: string; text: string };
 
+type Submission = Awaited<ReturnType<typeof listRequests>>[number];
+
 function now() {
   return new Date().toLocaleTimeString("en-GB", { hour12: false });
 }
