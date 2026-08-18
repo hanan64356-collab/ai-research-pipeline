@@ -1,21 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-
-const submitSchema = z.object({
-  topic: z.string().trim().min(3).max(180),
-  subtopics: z.string().trim().max(400).default(""),
-  description: z.string().trim().max(1200).default(""),
-  reviewerEmail: z.string().trim().email().max(255),
-  origin: z.string().trim().url().max(300),
-});
-
-const tokenSchema = z.object({ token: z.string().uuid() });
-
-const feedbackSchema = z.object({
-  token: z.string().uuid(),
-  feedback: z.string().trim().min(4).max(2000),
-  origin: z.string().trim().url().max(300),
-});
+import { feedbackSchema, requestIdSchema, submitSchema, tokenSchema } from "./research.schemas";
 
 export const submitResearch = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => submitSchema.parse(data))
@@ -30,7 +14,7 @@ export const listRequests = createServerFn({ method: "GET" }).handler(async () =
 });
 
 export const getRequestStatus = createServerFn({ method: "POST" })
-  .inputValidator((data: unknown) => z.object({ id: z.string().uuid() }).parse(data))
+  .inputValidator((data: unknown) => requestIdSchema.parse(data))
   .handler(async ({ data }) => {
     const { readStatus } = await import("./pipeline.server");
     return readStatus(data.id);

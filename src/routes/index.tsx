@@ -99,6 +99,47 @@ function stagesFor(status: string): { active: StageId | null; completed: StageId
   }
 }
 
+type SubmissionStep = "research" | "drafting" | "approval";
+
+const completedStatuses: Record<SubmissionStep, Set<string>> = {
+  research: new Set(["drafting", "awaiting_review", "revising", "finalizing", "completed"]),
+  drafting: new Set(["awaiting_review", "revising", "finalizing", "completed"]),
+  approval: new Set(["completed"]),
+};
+
+function StepStatus({ step, status }: { step: SubmissionStep; status: string }) {
+  const done = completedStatuses[step].has(status);
+  const active =
+    (step === "research" && status === "researching") ||
+    (step === "drafting" && ["drafting", "revising"].includes(status)) ||
+    (step === "approval" && ["awaiting_review", "finalizing"].includes(status));
+  const failed = status === "failed";
+  const label = done ? "Done" : active ? "In progress" : failed ? "Blocked" : "Waiting";
+  const Icon = done ? CheckCircle2 : active ? Clock : failed ? XCircle : Circle;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={`inline-flex size-7 items-center justify-center rounded-md border ${
+            done
+              ? "border-success/35 bg-success/10 text-success"
+              : active
+                ? "border-warning/35 bg-warning/10 text-warning"
+                : failed
+                  ? "border-destructive/35 bg-destructive/10 text-destructive"
+                  : "border-border bg-node text-muted-foreground"
+          }`}
+          aria-label={`${step}: ${label}`}
+        >
+          <Icon className={`size-4 ${active ? "animate-pulse" : ""}`} />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function Index() {
   const [form, setForm] = useState<PipelineForm>(DEMO_FORM);
   const [log, setLog] = useState<LogLine[]>([]);
@@ -374,6 +415,85 @@ function Index() {
           </section>
         </div>
       </div>
+
+      <section className="panel mt-6 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-5">
+          <div>
+            <h2 className="text-lg font-semibold">Submission status</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Research, drafting and approval progress for each request.
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void refreshSubmissions()}
+            disabled={loadingSubmissions}
+            aria-label="Refresh submissions"
+            title="Refresh submissions"
+          >
+            <RefreshCw className={`size-4 ${loadingSubmissions ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
+        <TooltipProvider>
+          <div className="overflow-x-auto">
+            <Table className="min-w-[42rem]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Submission</TableHead>
+                  <TableHead className="w-36">Created</TableHead>
+                  <TableHead className="w-24 text-center">Research</TableHead>
+                  <TableHead className="w-24 text-center">Drafting</TableHead>
+                  <TableHead className="w-24 text-center">Approval</TableHead>
+                  <TableHead className="w-32">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {submissions.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                      {loadingSubmissions ? "Loading submissions…" : "No submissions yet."}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  submissions.map((submission) => (
+                    <TableRow key={submission.id}>
+                      <TableCell>
+                        <p className="max-w-md truncate font-medium">{submission.topic}</p>
+                        {submission.error && (
+                          <p className="mt-1 max-w-md truncate text-xs text-destructive">
+                            {submission.error}
+                          </p>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {new Date(submission.createdAt).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <StepStatus step="research" status={submission.status} />
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <StepStatus step="drafting" status={submission.status} />
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <StepStatus step="approval" status={submission.status} />
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={submission.status === "failed" ? "destructive" : "outline"}
+                          className="whitespace-nowrap font-mono text-[10px]"
+                        >
+                          {submission.status.replace(/_/g, " ")}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </TooltipProvider>
+      </section>
     </main>
   );
 }
