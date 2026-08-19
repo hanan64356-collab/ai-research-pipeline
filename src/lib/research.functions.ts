@@ -1,8 +1,21 @@
 import { createServerFn } from "@tanstack/react-start";
-import { feedbackSchema, requestIdSchema, submitSchema, tokenSchema } from "./research.schemas";
+import {
+  feedbackSchema,
+  requestIdSchema,
+  runPipelineSchema,
+  submitSchema,
+  tokenSchema,
+} from "./research.schemas";
 
 export const submitResearch = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => submitSchema.parse(data))
+  .handler(async ({ data }) => {
+    const { createRequest } = await import("./pipeline.server");
+    return createRequest(data);
+  });
+
+export const runResearchPipeline = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => runPipelineSchema.parse(data))
   .handler(async ({ data }) => {
     const { runInitialResearch } = await import("./pipeline.server");
     return runInitialResearch(data);
