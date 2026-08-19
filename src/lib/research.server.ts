@@ -34,13 +34,10 @@ export function appOrigin(): string {
 async function geminiGenerate(body: Record<string, unknown>): Promise<Response> {
   const key = geminiKey();
   return fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": key,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     },
   );
