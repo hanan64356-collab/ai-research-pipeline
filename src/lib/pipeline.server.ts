@@ -102,12 +102,18 @@ export async function runInitialResearch(input: { id: string; origin: string }) 
     if (sources.length === 0) throw new Error("No web sources were found for this topic.");
     await db.from("research_requests").update({ sources, status: "drafting" }).eq("id", id);
 
-    const reportHtml = await generateReport({ ...input, sources });
+    const topic = data.topic as string;
+    const reportHtml = await generateReport({
+      topic,
+      subtopics: data.subtopics as string,
+      description: data.description as string,
+      sources,
+    });
     const links = reviewLinks(input.origin, token);
     await sendEmail(
-      input.reviewerEmail,
-      `Review needed: ${input.topic}`,
-      reviewEmail({ topic: input.topic, reportHtml, revision: 0, sources, ...links }),
+      reviewerEmail,
+      `Review needed: ${topic}`,
+      reviewEmail({ topic, reportHtml, revision: 0, sources, ...links }),
     );
     await db
       .from("research_requests")
