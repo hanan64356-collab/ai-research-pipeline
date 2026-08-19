@@ -5,6 +5,10 @@ export const submitSchema = z.object({
   subtopics: z.string().trim().max(400).default(""),
   description: z.string().trim().max(1200).default(""),
   reviewerEmail: z.string().trim().email().max(255),
+});
+
+export const runPipelineSchema = z.object({
+  id: z.string().uuid(),
   origin: z.string().trim().url().max(300),
 });
 
