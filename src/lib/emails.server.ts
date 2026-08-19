@@ -56,14 +56,14 @@ export function completedEmail(input: {
 }): string {
   return shell(`
     <h2 style="margin:0 0 14px;font-size:22px;">It's done — "${escapeHtml(input.topic)}" is archived</h2>
-    <p style="margin:0 0 18px;">The approved report was converted to PDF, uploaded to Google Drive and logged in the tracking sheet.</p>
+    <p style="margin:0 0 18px;">The approved report was converted to PDF, uploaded to cloud storage, and logged in the research archive.</p>
     <ul style="margin:0 0 22px;padding-left:20px;">
       <li>File: <strong>${escapeHtml(input.pdfName)}</strong></li>
       <li>Revision cycles before approval: <strong>${input.revisions}</strong></li>
     </ul>
     <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-      <td style="padding-right:10px;"><a href="${input.driveLink}" style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:bold;">Open PDF in Drive</a></td>
-      <td><a href="${input.sheetLink}" style="display:inline-block;background:#ffffff;color:${INK};border:1px solid #cbd5e1;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:bold;">Open research log</a></td>
+      <td style="padding-right:10px;"><a href="${input.driveLink}" style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:bold;">Open archived PDF</a></td>
+      <td><a href="${input.sheetLink}" style="display:inline-block;background:#ffffff;color:${INK};border:1px solid #cbd5e1;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:bold;">View research log</a></td>
     </tr></table>
   `);
 }

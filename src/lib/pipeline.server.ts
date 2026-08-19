@@ -1,11 +1,12 @@
 /** Orchestration for the research pipeline. Server-only. */
 import {
   appendLogRow,
+  appOrigin,
   generateReport,
   renderPdf,
   reviseReport,
   sendEmail,
-  tavilySearch,
+  webSearch,
   uploadPdfToDrive,
   type Source,
 } from "./research.server";
@@ -94,7 +95,7 @@ export async function runInitialResearch(input: { id: string; origin: string }) 
   const reviewerEmail = data.reviewer_email as string;
 
   try {
-    const sources = await tavilySearch(
+    const sources = await webSearch(
       data.topic as string,
       data.subtopics as string,
       data.description as string,
@@ -250,15 +251,18 @@ export async function runFinalization(token: string) {
       `${row.topic} — approved ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`,
     );
     const drive = await uploadPdfToDrive(pdfName, bytes);
-    const sheetLink = await appendLogRow([
-      new Date().toISOString().slice(0, 16).replace("T", " "),
-      row.topic,
-      row.subtopics,
-      row.reviewer_email,
-      row.revisions,
-      drive.link,
-      "Approved",
-    ]);
+    const sheetLink = await appendLogRow(
+      [
+        new Date().toISOString().slice(0, 16).replace("T", " "),
+        row.topic,
+        row.subtopics,
+        row.reviewer_email,
+        row.revisions,
+        drive.link,
+        "Approved",
+      ],
+      appOrigin(),
+    );
     await sendEmail(
       row.reviewer_email,
       `It's done: ${row.topic}`,

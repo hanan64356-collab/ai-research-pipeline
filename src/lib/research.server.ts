@@ -1,107 +1,157 @@
 /**
- * Server-only implementation of the research pipeline:
- * Tavily web search -> AI report -> Gmail -> PDF -> Google Drive -> Google Sheets.
+ * Server-only research pipeline (no Lovable/Tavily dependencies):
+ * Gemini web search -> AI report -> SMTP email -> PDF -> Supabase Storage + log.
  */
+import nodemailer from "nodemailer";
+
 export type Source = { title: string; url: string; snippet: string; score: number };
 
-const GATEWAY = "https://connector-gateway.lovable.dev";
+const GEMINI_MODEL = "gemini-3.6-flash";
+const STORAGE_BUCKET = "research-reports";
+
+function env(name: string): string {
+  return process.env[name]?.trim().replace(/^["']|["']$/g, "") ?? "";
+}
 
 function requireEnv(name: string): string {
-  const value = process.env[name]?.trim().replace(/^["']|["']$/g, "");
+  const value = env(name);
   if (!value) throw new Error(`${name} is not configured`);
   return value;
 }
 
-
-async function gateway(
-  connector: "google_mail" | "google_drive" | "google_sheets",
-  path: string,
-  init: RequestInit & { rawBody?: BodyInit } = {},
-): Promise<Response> {
-  const keyName =
-    connector === "google_mail"
-      ? "GOOGLE_MAIL_API_KEY"
-      : connector === "google_drive"
-        ? "GOOGLE_DRIVE_API_KEY"
-        : "GOOGLE_SHEETS_API_KEY";
-  const res = await fetch(`${GATEWAY}/${connector}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${requireEnv("LOVABLE_API_KEY")}`,
-      "X-Connection-Api-Key": requireEnv(keyName),
-      ...(init.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    console.error(`Gateway ${connector} ${path} failed [${res.status}]: ${body}`);
-    throw new Error(`${connector} request failed [${res.status}]: ${body}`);
-  }
-  return res;
+function geminiKey(): string {
+  return requireEnv("GEMINI_API_KEY");
 }
 
-/* ------------------------------ Tavily search ----------------------------- */
+export function appOrigin(): string {
+  const configured = env("APP_URL");
+  if (configured) return configured.replace(/\/$/, "");
+  const vercel = env("VERCEL_URL");
+  if (vercel) return `https://${vercel.replace(/^https?:\/\//, "")}`;
+  return "http://localhost:8080";
+}
 
-export async function tavilySearch(
+async function geminiGenerate(body: Record<string, unknown>): Promise<Response> {
+  const key = geminiKey();
+  return fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": key,
+      },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+/* ------------------------------ Web search -------------------------------- */
+
+function sourcesFromGrounding(json: {
+  candidates?: {
+    groundingMetadata?: {
+      groundingChunks?: { web?: { uri?: string; title?: string } }[];
+    };
+    content?: { parts?: { text?: string }[] };
+  }[];
+}): Source[] {
+  const chunks = json.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+  const fromWeb = chunks
+    .map((c, i) => ({
+      title: c.web?.title ?? `Source ${i + 1}`,
+      url: c.web?.uri ?? "",
+      snippet: "",
+      score: 1 - i * 0.05,
+    }))
+    .filter((s) => s.url);
+  if (fromWeb.length > 0) return fromWeb.slice(0, 8);
+
+  const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  try {
+    const match = text.match(/\[[\s\S]*\]/);
+    if (match) {
+      const parsed = JSON.parse(match[0]) as { title?: string; url?: string; snippet?: string }[];
+      return parsed
+        .filter((s) => s.url)
+        .map((s, i) => ({
+          title: s.title ?? `Source ${i + 1}`,
+          url: s.url ?? "",
+          snippet: (s.snippet ?? "").slice(0, 600),
+          score: 1 - i * 0.05,
+        }))
+        .slice(0, 8);
+    }
+  } catch {
+    /* fall through */
+  }
+  return [];
+}
+
+export async function webSearch(
   topic: string,
   subtopics: string,
   description: string,
 ): Promise<Source[]> {
   const query = [topic, subtopics, description].filter(Boolean).join(" — ").slice(0, 380);
-  const key = requireEnv("TAVILY_API_KEY");
-  const payload = {
-    query,
-    search_depth: "advanced",
-    max_results: 8,
-    include_answer: false,
-  };
 
-  const call = (mode: "bearer" | "body") =>
-    fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(mode === "bearer" ? { Authorization: `Bearer ${key}` } : {}),
+  let res = await geminiGenerate({
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text:
+              `Find current, authoritative web sources for this research brief:\n${query}\n\n` +
+              "Prefer recent reports, official sites, and reputable news.",
+          },
+        ],
       },
-      body: JSON.stringify(mode === "bearer" ? payload : { ...payload, api_key: key }),
-    });
+    ],
+    tools: [{ google_search: {} }],
+  });
 
-  let res = await call("bearer");
-  if (res.status === 401) res = await call("body");
   if (!res.ok) {
-    const body = await res.text();
-    console.error(`Tavily search failed [${res.status}]: ${body}`);
-    throw new Error(`Tavily search failed [${res.status}]: ${body}`);
+    res = await geminiGenerate({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text:
+                `List 6–8 authoritative web sources for:\n${query}\n\n` +
+                'Return ONLY a JSON array: [{"title":"...","url":"https://...","snippet":"..."}]',
+            },
+          ],
+        },
+      ],
+    });
   }
 
-  const json = (await res.json()) as {
-    results?: { title?: string; url?: string; content?: string; score?: number }[];
-  };
-  return (json.results ?? []).map((r) => ({
-    title: r.title ?? "Untitled source",
-    url: r.url ?? "",
-    snippet: (r.content ?? "").slice(0, 600),
-    score: typeof r.score === "number" ? r.score : 0,
-  }));
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`Gemini search failed [${res.status}]: ${body}`);
+    throw new Error(`Web search failed [${res.status}]: ${body}`);
+  }
+
+  const json = (await res.json()) as Parameters<typeof sourcesFromGrounding>[0];
+  const sources = sourcesFromGrounding(json);
+  if (sources.length === 0) {
+    throw new Error("No web sources were found for this topic.");
+  }
+  return sources;
 }
+
+/** @deprecated Use webSearch — kept for pipeline import compatibility */
+export const tavilySearch = webSearch;
 
 /* --------------------------------- AI report ------------------------------- */
 
-async function callGeminiDirect(system: string, user: string): Promise<string> {
-  const key = process.env["GEMINI_API_KEY"]?.trim().replace(/^["']|["']$/g, "");
-  if (!key) throw new Error("GEMINI_API_KEY is not configured");
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: "user", parts: [{ text: user }] }],
-      }),
-    },
-  );
+async function callGemini(system: string, user: string): Promise<string> {
+  const res = await geminiGenerate({
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: "user", parts: [{ text: user }] }],
+  });
   if (!res.ok) {
     const body = await res.text();
     console.error(`Gemini API failed [${res.status}]: ${body}`);
@@ -115,35 +165,8 @@ async function callGeminiDirect(system: string, user: string): Promise<string> {
   return text;
 }
 
-async function callLovableAi(system: string, user: string): Promise<string> {
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${requireEnv("LOVABLE_API_KEY")}`,
-    },
-    body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    console.error(`AI gateway failed [${res.status}]: ${body}`);
-    throw new Error(`AI request failed [${res.status}]: ${body}`);
-  }
-  const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const text = json.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error("The AI returned an empty report.");
-  return text;
-}
-
 async function callAi(system: string, user: string): Promise<string> {
-  if (process.env["GEMINI_API_KEY"]?.trim()) return callGeminiDirect(system, user);
-  return callLovableAi(system, user);
+  return callGemini(system, user);
 }
 
 const REPORT_SYSTEM =
@@ -214,33 +237,28 @@ function stripHtmlWrapper(html: string): string {
     .trim();
 }
 
-/* ---------------------------------- Gmail --------------------------------- */
-
-function encodeHeader(value: string): string {
-  return /^[\x20-\x7e]*$/.test(value)
-    ? value
-    : `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
-}
+/* ------------------------------ SMTP email -------------------------------- */
 
 export async function sendEmail(to: string, subject: string, html: string): Promise<void> {
-  const message = [
-    `To: ${to}`,
-    `Subject: ${encodeHeader(subject)}`,
-    "MIME-Version: 1.0",
-    'Content-Type: text/html; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    Buffer.from(html, "utf8").toString("base64"),
-  ].join("\r\n");
-  const raw = Buffer.from(message, "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-  await gateway("google_mail", "/gmail/v1/users/me/messages/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ raw }),
+  const user = env("SMTP_USER");
+  const pass = env("SMTP_PASS");
+  if (!user || !pass) {
+    console.warn(`[email skipped — SMTP not configured] To: ${to}, Subject: ${subject}`);
+    return;
+  }
+
+  const transport = nodemailer.createTransport({
+    host: env("SMTP_HOST") || "smtp.gmail.com",
+    port: Number(env("SMTP_PORT") || 587),
+    secure: false,
+    auth: { user, pass },
+  });
+
+  await transport.sendMail({
+    from: env("SMTP_FROM") || user,
+    to,
+    subject,
+    html,
   });
 }
 
@@ -348,95 +366,69 @@ export async function renderPdf(reportHtml: string, footer: string): Promise<Uin
   return doc.save();
 }
 
-/* ------------------------------- Google Drive ----------------------------- */
+/* --------------------------- Supabase Storage ----------------------------- */
+
+async function ensureStorageBucket() {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: buckets } = await supabaseAdmin.storage.listBuckets();
+  if (!buckets?.some((b) => b.name === STORAGE_BUCKET)) {
+    const { error } = await supabaseAdmin.storage.createBucket(STORAGE_BUCKET, { public: true });
+    if (error && !error.message.includes("already exists")) {
+      throw new Error(`Could not create storage bucket: ${error.message}`);
+    }
+  }
+}
 
 export async function uploadPdfToDrive(
   name: string,
   bytes: Uint8Array,
 ): Promise<{ id: string; link: string }> {
-  const boundary = `lovable${crypto.randomUUID().replace(/-/g, "")}`;
-  const metadata = JSON.stringify({ name, mimeType: "application/pdf" });
-  const head =
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n` +
-    `--${boundary}\r\nContent-Type: application/pdf\r\n\r\n`;
-  const tail = `\r\n--${boundary}--`;
-  const body = new Blob([head, bytes as BlobPart, tail]);
-
-  const res = await gateway(
-    "google_drive",
-    "/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink",
-    {
-      method: "POST",
-      headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
-      body,
-    },
-  );
-  const json = (await res.json()) as { id: string; webViewLink?: string };
-  return {
-    id: json.id,
-    link: json.webViewLink ?? `https://drive.google.com/file/d/${json.id}/view`,
-  };
-}
-
-/* ------------------------------ Google Sheets ----------------------------- */
-
-const SHEET_TAB = "Research Log";
-const HEADERS = [
-  "Timestamp",
-  "Topic",
-  "Subtopics",
-  "Reviewer email",
-  "Revisions",
-  "Drive link",
-  "Status",
-];
-
-async function createLogSpreadsheet(): Promise<string> {
-  const res = await gateway("google_sheets", "/v4/spreadsheets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      properties: { title: "AI Research Pipeline — Research Log" },
-      sheets: [{ properties: { title: SHEET_TAB } }],
-    }),
-  });
-  const json = (await res.json()) as { spreadsheetId: string };
-  await gateway(
-    "google_sheets",
-    `/v4/spreadsheets/${json.spreadsheetId}/values/${SHEET_TAB}!A1:G1?valueInputOption=RAW`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ values: [HEADERS] }),
-    },
-  );
-  return json.spreadsheetId;
-}
-
-export async function appendLogRow(row: (string | number)[]): Promise<string> {
+  await ensureStorageBucket();
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data } = await supabaseAdmin
-    .from("app_settings")
-    .select("value")
-    .eq("key", "research_log_spreadsheet_id")
-    .maybeSingle();
+  const path = `${Date.now()}-${name.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
 
-  let spreadsheetId = data?.value;
-  if (!spreadsheetId) {
-    spreadsheetId = await createLogSpreadsheet();
-    await supabaseAdmin
+  const { error } = await supabaseAdmin.storage.from(STORAGE_BUCKET).upload(path, bytes, {
+    contentType: "application/pdf",
+    upsert: false,
+  });
+  if (error) throw new Error(`PDF upload failed: ${error.message}`);
+
+  const { data } = supabaseAdmin.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+  return { id: path, link: data.publicUrl };
+}
+
+/* ----------------------------- Research log ------------------------------- */
+
+export async function appendLogRow(
+  row: (string | number)[],
+  appUrl = "/",
+): Promise<string> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const [loggedAt, topic, subtopics, reviewerEmail, revisions, archiveLink, status] = row;
+  const entry = {
+    logged_at: String(loggedAt),
+    topic: String(topic),
+    subtopics: String(subtopics),
+    reviewer_email: String(reviewerEmail),
+    revisions: Number(revisions),
+    archive_link: String(archiveLink),
+    status: String(status),
+  };
+
+  const { error } = await supabaseAdmin.from("research_log").insert(entry);
+  if (error) {
+    const { data } = await supabaseAdmin
       .from("app_settings")
-      .upsert({ key: "research_log_spreadsheet_id", value: spreadsheetId }, { onConflict: "key" });
+      .select("value")
+      .eq("key", "research_log_entries")
+      .maybeSingle();
+    const entries = data?.value ? (JSON.parse(data.value) as typeof entry[]) : [];
+    entries.unshift(entry);
+    await supabaseAdmin.from("app_settings").upsert(
+      { key: "research_log_entries", value: JSON.stringify(entries.slice(0, 100)) },
+      { onConflict: "key" },
+    );
   }
 
-  await gateway(
-    "google_sheets",
-    `/v4/spreadsheets/${spreadsheetId}/values/${SHEET_TAB}!A:G:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ values: [row] }),
-    },
-  );
-  return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+  return appUrl.endsWith("/") ? `${appUrl}#submission-status` : `${appUrl}/#submission-status`;
 }
