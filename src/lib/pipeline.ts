@@ -26,7 +26,7 @@ export const DEMO_FORM: PipelineForm = {
   topic: "Solar Mini-Grids for Rural Health Clinics in Ethiopia",
   subtopics: "cold-chain vaccine storage, tariff models, maintenance training",
   description: "Briefing for a regional health bureau, decision-maker level, 2026 data.",
-  reviewerEmail: "hanan.reviewer@invisionafrica.org",
+  reviewerEmail: "Hanan64356@gmail.com",
 };
 
 const slug = (s: string) =>
