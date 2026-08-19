@@ -31,7 +31,12 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { WorkflowCanvas, type StageId } from "@/components/WorkflowCanvas";
 import { DEMO_FORM, type PipelineForm } from "@/lib/pipeline";
-import { getRequestStatus, listRequests, submitResearch } from "@/lib/research.functions";
+import {
+  getRequestStatus,
+  listRequests,
+  runResearchPipeline,
+  submitResearch,
+} from "@/lib/research.functions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
