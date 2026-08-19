@@ -87,7 +87,35 @@ export async function tavilySearch(
 
 /* --------------------------------- AI report ------------------------------- */
 
-async function callAi(system: string, user: string): Promise<string> {
+async function callGeminiDirect(system: string, user: string): Promise<string> {
+  const key = process.env["GEMINI_API_KEY"]?.trim().replace(/^["']|["']$/g, "");
+  if (!key) throw new Error("GEMINI_API_KEY is not configured");
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: user }] }],
+      }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`Gemini API failed [${res.status}]: ${body}`);
+    throw new Error(`AI request failed [${res.status}]: ${body}`);
+  }
+  const json = (await res.json()) as {
+    candidates?: { content?: { parts?: { text?: string }[] } }[];
+  };
+  const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("").trim();
+  if (!text) throw new Error("The AI returned an empty report.");
+  return text;
+}
+
+async function callLovableAi(system: string, user: string): Promise<string> {
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -111,6 +139,11 @@ async function callAi(system: string, user: string): Promise<string> {
   const text = json.choices?.[0]?.message?.content?.trim();
   if (!text) throw new Error("The AI returned an empty report.");
   return text;
+}
+
+async function callAi(system: string, user: string): Promise<string> {
+  if (process.env["GEMINI_API_KEY"]?.trim()) return callGeminiDirect(system, user);
+  return callLovableAi(system, user);
 }
 
 const REPORT_SYSTEM =
