@@ -6,7 +6,7 @@ import nodemailer from "nodemailer";
 
 export type Source = { title: string; url: string; snippet: string; score: number };
 
-const GEMINI_MODEL = "gemini-3.6-flash";
+const GEMINI_MODEL = "gemini-flash-latest";
 const STORAGE_BUCKET = "research-reports";
 
 function env(name: string): string {
