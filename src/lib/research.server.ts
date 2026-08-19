@@ -2,8 +2,6 @@
  * Server-only implementation of the research pipeline:
  * Tavily web search -> AI report -> Gmail -> PDF -> Google Drive -> Google Sheets.
  */
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-
 export type Source = { title: string; url: string; snippet: string; score: number };
 
 const GATEWAY = "https://connector-gateway.lovable.dev";
@@ -255,6 +253,7 @@ function sanitizeForPdf(s: string): string {
 }
 
 export async function renderPdf(reportHtml: string, footer: string): Promise<Uint8Array> {
+  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
   const doc = await PDFDocument.create();
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
