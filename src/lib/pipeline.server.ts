@@ -58,12 +58,11 @@ async function fail(id: string, message: string) {
   await db.from("research_requests").update({ status: "failed", error_message: message }).eq("id", id);
 }
 
-export async function runInitialResearch(input: {
+export async function createRequest(input: {
   topic: string;
   subtopics: string;
   description: string;
   reviewerEmail: string;
-  origin: string;
 }) {
   const db = await admin();
   const { data, error } = await db
@@ -75,15 +74,31 @@ export async function runInitialResearch(input: {
       reviewer_email: input.reviewerEmail,
       status: "researching",
     })
-    .select("id, review_token")
+    .select("id")
     .single();
   if (error || !data) throw new Error(error?.message ?? "Could not save the request.");
+  return { id: data.id as string, status: "researching" as const };
+}
+
+export async function runInitialResearch(input: { id: string; origin: string }) {
+  const db = await admin();
+  const { data } = await db
+    .from("research_requests")
+    .select("id, topic, subtopics, description, reviewer_email, review_token, status")
+    .eq("id", input.id)
+    .maybeSingle();
+  if (!data) throw new Error("This request no longer exists.");
 
   const id = data.id as string;
   const token = data.review_token as string;
+  const reviewerEmail = data.reviewer_email as string;
 
   try {
-    const sources = await tavilySearch(input.topic, input.subtopics, input.description);
+    const sources = await tavilySearch(
+      data.topic as string,
+      data.subtopics as string,
+      data.description as string,
+    );
     if (sources.length === 0) throw new Error("No web sources were found for this topic.");
     await db.from("research_requests").update({ sources, status: "drafting" }).eq("id", id);
 
